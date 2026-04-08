@@ -141,7 +141,7 @@ static volatile uint8_t gui_pending_action = GUI_ACTION_NONE;
 static char gui_pending_action_arg[MBFS_PATH_MAX];
 static uint8_t mouse_packet[3] = {0, 0, 0};
 static volatile uint32_t last_status_report_tick = 0;
- static uint8_t auto_simulate_click = 1; /* automatic GUI click sequence for headless tests */
+ static uint8_t auto_simulate_click = 0; /* automatic GUI click sequence for headless tests (disabled by default) */
 static uint8_t auto_simclick_step = 0;
 static uint32_t auto_next_click_tick = 0;
 static uint8_t auto_simclick_dumped = 0;
@@ -9018,6 +9018,29 @@ static void shell_execute_command(const char* cmd)
         return;
     }
 
+    /* Toggle serial debug emission at runtime: dbgserial <on|off> */
+    const char* dbgserial_prefix = "dbgserial ";
+    if (str_starts_with(cmd, dbgserial_prefix)) {
+        const char* arg = cmd + str_length(dbgserial_prefix);
+        while (*arg == ' ') { arg++; }
+        if (str_equals(arg, "on")) {
+            dbg_emit_serial = 1;
+            terminal_write("Serial debug enabled\n");
+        } else if (str_equals(arg, "off")) {
+            dbg_emit_serial = 0;
+            terminal_write("Serial debug disabled\n");
+        } else {
+            terminal_write("Usage: dbgserial <on|off>\n");
+        }
+        return;
+    }
+
+    /* Dump current WM state to serial/terminal */
+    if (str_equals(cmd, "wmdump")) {
+        wm_dump_state();
+        return;
+    }
+
     if (str_equals(cmd, guitest_cmd)) {
         if (!gui_framebuffer_detected) {
             terminal_write("No framebuffer info from bootloader\n");
@@ -10122,29 +10145,46 @@ static uint8_t mouse_read_data(void)
 static void mouse_init_hw(void)
 {
     uint8_t config;
+    if (dbg_emit_serial) { serial_write("PS2: mouse_init_hw start\n"); }
 
-    if (!ps2_wait_write_ready()) { return; }
+    if (!ps2_wait_write_ready()) { if (dbg_emit_serial) { serial_write("PS2: wait_write_ready failed (A)\n"); } return; }
     outb(0x64, 0xA8); /* Enable PS/2 auxiliary device (mouse). */
+    if (dbg_emit_serial) { serial_write("PS2: cmd 0xA8 sent\n"); }
 
-    if (!ps2_wait_write_ready()) { return; }
+    if (!ps2_wait_write_ready()) { if (dbg_emit_serial) { serial_write("PS2: wait_write_ready failed (B)\n"); } return; }
     outb(0x64, 0x20); /* Read controller config byte. */
     config = mouse_read_data();
+    if (dbg_emit_serial) { serial_write("PS2: cfg read="); serial_write_hex((uint32_t)config); serial_write("\n"); }
     config |= 0x02u; /* Enable IRQ12. */
     config &= (uint8_t)~0x20u; /* Ensure auxiliary clock is enabled. */
 
-    if (!ps2_wait_write_ready()) { return; }
+    if (!ps2_wait_write_ready()) { if (dbg_emit_serial) { serial_write("PS2: wait_write_ready failed (C)\n"); } return; }
     outb(0x64, 0x60); /* Write controller config byte. */
-    if (!ps2_wait_write_ready()) { return; }
+    if (dbg_emit_serial) { serial_write("PS2: cmd 0x60 sent\n"); }
+    if (!ps2_wait_write_ready()) { if (dbg_emit_serial) { serial_write("PS2: wait_write_ready failed (D)\n"); } return; }
     outb(0x60, config);
+    if (dbg_emit_serial) { serial_write("PS2: cfg wrote="); serial_write_hex((uint32_t)config); serial_write("\n"); }
 
     mouse_write_device(0xF6); /* Set defaults. */
-    (void)mouse_read_data();
+    if (ps2_wait_read_ready()) {
+        uint8_t r = mouse_read_data();
+        if (dbg_emit_serial) { serial_write("PS2: mouse resp to 0xF6="); serial_write_hex((uint32_t)r); serial_write("\n"); }
+    } else {
+        if (dbg_emit_serial) { serial_write("PS2: no resp for 0xF6\n"); }
+    }
+
     mouse_write_device(0xF4); /* Enable data reporting. */
-    (void)mouse_read_data();
+    if (ps2_wait_read_ready()) {
+        uint8_t r2 = mouse_read_data();
+        if (dbg_emit_serial) { serial_write("PS2: mouse resp to 0xF4="); serial_write_hex((uint32_t)r2); serial_write("\n"); }
+    } else {
+        if (dbg_emit_serial) { serial_write("PS2: no resp for 0xF4\n"); }
+    }
 
     mouse_cycle = 0;
     mouse_buttons = 0;
     mouse_enabled = 1;
+    if (dbg_emit_serial) { serial_write("PS2: mouse_init_hw done, mouse_enabled=1\n"); }
 }
 
 static void pit_init(uint32_t frequency_hz)
@@ -10680,29 +10720,33 @@ void irq_handler(struct interrupt_frame* frame)
                     /* Log mouse click/motion event (IRQ-level) */
                     dbg_log_event(DBG_EV_MOUSE_CLICK, (int32_t)mouse_x, (int32_t)mouse_y);
 
-                    /* Serial debug: print packet bytes and key GUI/WM state */
-                    serial_write("MOUSE IRQ: pkt=");
-                    serial_write_hex((uint32_t)mouse_packet[0]); serial_write(" ");
-                    serial_write_hex((uint32_t)mouse_packet[1]); serial_write(" ");
-                    serial_write_hex((uint32_t)mouse_packet[2]); serial_write(", x=");
-                    serial_write_dec_u32((uint32_t)mouse_x); serial_write(", y=");
-                    serial_write_dec_u32((uint32_t)mouse_y); serial_write(", btn=");
-                    serial_write_dec_u32((uint32_t)mouse_buttons);
-                    serial_write(", gf_detected="); serial_write_dec_u32((uint32_t)gui_framebuffer_detected);
-                    serial_write(", gf_mapped="); serial_write_dec_u32((uint32_t)gui_framebuffer_mapped);
-                    serial_write(", wm_enabled="); serial_write_dec_u32((uint32_t)wm_enabled);
-                    serial_write(", wm_render_pending="); serial_write_dec_u32((uint32_t)wm_render_pending);
-                    serial_write("\n");
+                    /* Serial/VGA debug: print packet bytes and key GUI/WM state when enabled */
+                    if (dbg_emit_serial) {
+                        serial_write("MOUSE IRQ: pkt=");
+                        serial_write_hex((uint32_t)mouse_packet[0]); serial_write(" ");
+                        serial_write_hex((uint32_t)mouse_packet[1]); serial_write(" ");
+                        serial_write_hex((uint32_t)mouse_packet[2]); serial_write(", x=");
+                        serial_write_dec_u32((uint32_t)mouse_x); serial_write(", y=");
+                        serial_write_dec_u32((uint32_t)mouse_y); serial_write(", btn=");
+                        serial_write_dec_u32((uint32_t)mouse_buttons);
+                        serial_write(", gf_detected="); serial_write_dec_u32((uint32_t)gui_framebuffer_detected);
+                        serial_write(", gf_mapped="); serial_write_dec_u32((uint32_t)gui_framebuffer_mapped);
+                        serial_write(", wm_enabled="); serial_write_dec_u32((uint32_t)wm_enabled);
+                        serial_write(", wm_render_pending="); serial_write_dec_u32((uint32_t)wm_render_pending);
+                        serial_write("\n");
+                    }
 
-                    /* Also print a VGA-visible line so digits are visible via VNC/SDL */
-                    terminal_write("MOUSE VGA: pkt=");
-                    terminal_write_hex((uint32_t)mouse_packet[0]); terminal_write(" ");
-                    terminal_write_hex((uint32_t)mouse_packet[1]); terminal_write(" ");
-                    terminal_write_hex((uint32_t)mouse_packet[2]); terminal_write(", x=");
-                    terminal_write_dec_u32((uint32_t)mouse_x); terminal_write(", y=");
-                    terminal_write_dec_u32((uint32_t)mouse_y); terminal_write(", btn=");
-                    terminal_write_hex((uint32_t)mouse_buttons);
-                    terminal_write("\n");
+                    /* Also optionally print a VGA-visible line so digits are visible via VNC/SDL */
+                    if (dbg_emit_serial) {
+                        terminal_write("MOUSE VGA: pkt=");
+                        terminal_write_hex((uint32_t)mouse_packet[0]); terminal_write(" ");
+                        terminal_write_hex((uint32_t)mouse_packet[1]); terminal_write(" ");
+                        terminal_write_hex((uint32_t)mouse_packet[2]); terminal_write(", x=");
+                        terminal_write_dec_u32((uint32_t)mouse_x); terminal_write(", y=");
+                        terminal_write_dec_u32((uint32_t)mouse_y); terminal_write(", btn=");
+                        terminal_write_hex((uint32_t)mouse_buttons);
+                        terminal_write("\n");
+                    }
 
                     /* Clamp to screen */
                     if (gui_framebuffer_width > 0 && mouse_x >= gui_framebuffer_width) {

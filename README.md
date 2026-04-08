@@ -164,6 +164,39 @@ For framebuffer GUI testing choose the GRUB entry `MBos (GUI Test)`.
 make clean
 ```
 
+## VNC automation (WSL)
+
+Quick helper to run an automated VNC pointer test (WSL/Linux):
+
+Prerequisites (WSL): `python3`, `python3-venv`, and `qemu-system-i386`.
+
+Create and activate a virtualenv, install `vncdotool`:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install vncdotool
+```
+
+Start the VM (from the repo root):
+
+```bash
+/usr/bin/qemu-system-i386 -m 512 -cdrom build/mbos.iso -serial file:build/serial.log -vnc :1 -qmp tcp:127.0.0.1:4444,server,nowait -net none -no-reboot &
+```
+
+Run the provided automation script which sends two pointer clicks (Start → Terminal) and inspects the serial log for evidence of mouse activity:
+
+```bash
+. .venv/bin/activate
+./tools/vnc_autotest.sh
+```
+
+Notes:
+- Automatic headless click sequence is disabled by default. Use `simclick <x> <y>` at the `MBos>` prompt to simulate a click manually.
+- To enable verbose PS/2 and mouse IRQ debug prints at runtime, use the `dbgserial on` command at the `MBos>` prompt. Disable with `dbgserial off`.
+- Dump window-manager state to the serial/terminal with the `wmdump` command.
+
 ## Executable Formats
 
 MBos supports multiple executable formats for user-mode applications:
