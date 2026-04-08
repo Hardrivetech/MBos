@@ -1,0 +1,14 @@
+set timeout=0
+set default=1
+
+menuentry "MBos" {
+  multiboot /boot/kernel.bin
+  boot
+}
+
+menuentry "MBos (GUI Test)" {
+  set gfxmode=1024x768x32
+  set gfxpayload=keep
+  multiboot /boot/kernel.bin
+  boot
+}

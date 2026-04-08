@@ -1,0 +1,24 @@
+name: Build MBos
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-multilib nasm grub-pc-bin xorriso
+      - name: Build MBos
+        run: |
+          make clean
+          make
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: mbos-iso
+          path: build/mbos.iso
